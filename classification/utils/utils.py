@@ -10,6 +10,48 @@ except ImportError:
 
 import csv
 import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+
+import json
+from torch import optim as optim
+
+from timm.optim.adafactor import Adafactor
+from timm.optim.adahessian import Adahessian
+from timm.optim.adamp import AdamP
+from timm.optim.lookahead import Lookahead
+from timm.optim.nadam import Nadam
+from timm.optim.radam import RAdam
+from timm.optim.rmsprop_tf import RMSpropTF
+from timm.optim.sgdp import SGDP
+
+import math 
+from torch._six import inf
+
+import models
+
+model_urls = {
+    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
+    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
+    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
+    'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
+    'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
+    'resnext50_32x4d': 'https://download.pytorch.org/models/resnext50_32x4d-7cdf4587.pth',
+    'resnext101_32x8d': 'https://download.pytorch.org/models/resnext101_32x8d-8ba56ff5.pth',
+    'wide_resnet50_2': 'https://download.pytorch.org/models/wide_resnet50_2-95faca4d.pth',
+    'wide_resnet101_2': 'https://download.pytorch.org/models/wide_resnet101_2-32ee1156.pth',
+
+    "convnext_tiny": "https://dl.fbaipublicfiles.com/convnext/convnext_tiny_1k_224_ema.pth",
+    "convnext_small": "https://dl.fbaipublicfiles.com/convnext/convnext_small_1k_224_ema.pth",
+    "convnext_base": "https://dl.fbaipublicfiles.com/convnext/convnext_base_1k_224_ema.pth",
+    "convnext_large": "https://dl.fbaipublicfiles.com/convnext/convnext_large_1k_224_ema.pth",
+    # "convnext_tiny_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_tiny_22k_224.pth",
+    # "convnext_small_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_small_22k_224.pth",
+    # "convnext_base_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_base_22k_224.pth",
+    # "convnext_large_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_large_22k_224.pth",
+    # "convnext_xlarge_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_xlarge_22k_224.pth",
+}
+
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -28,8 +70,10 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
+
 def count_parameters(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
 
 def accuracy(output, target, topk=(1,)):
     """Computes the precision@k for the specified values of k"""
@@ -45,6 +89,7 @@ def accuracy(output, target, topk=(1,)):
         correct_k = correct[:k].view(-1).float().sum(0)
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
+
 
 def save_checkpoint(state, folder, is_best, is_ft=False):
     """
@@ -110,11 +155,6 @@ class UnNormalize(object):
         return self.unnormalize(tensor)
 
 
-
-
-
-
-#### MEMORY optimization
 def update_model_criterion( bestprec1s, currentprec1s, target_densities ):
     # is_best = False
 
@@ -140,521 +180,6 @@ def update_model_criterion( bestprec1s, currentprec1s, target_densities ):
         return False
 
 
-
-#### MEMORY optimization
-def update_model_criterion_ignore( bestprec1s, currentprec1s, target_densities, predefinedlossw ):
-    # is_best = False
-
-    # all_best = True
-    # for target_density in target_densities:
-    #     if currentprec1s[target_density] < bestprec1s[target_density]:
-    #         all_best = False
-    #         break
-
-    # # precs best for all densities
-    # if all_best: return True
-    diff = 0
-    for cnt, target_density in enumerate(target_densities):
-        diff += predefinedlossw[cnt] * ( currentprec1s[target_density] - bestprec1s[target_density] )
-        print( "diff at " , target_density, " = ", predefinedlossw[cnt] * ( currentprec1s[target_density] - bestprec1s[target_density] ))
-
-    print("total diff = ", diff)
-    if diff > 0:
-        for target_density in target_densities:
-            bestprec1s[target_density] = max( bestprec1s[target_density], currentprec1s[target_density])
-        return True
-    else:
-        return False
-
-def save_checkpoint_finetuned(state, folder, is_best):
-    """
-    Save the training model
-    """
-    if len(folder) == 0:
-        print('Did not save model since no save directory specified in args!')
-        return
-        
-    if not os.path.exists(folder):
-        os.makedirs(folder)
-
-    filename = os.path.join(folder, 'checkpoint-ft.pth')
-    print(f" => Saving {filename}")
-    torch.save(state, filename)
-
-    if is_best:
-        filename = os.path.join(folder, 'checkpoint_best-ft.pth')
-        print(f" => Saving {filename}")
-        torch.save(state, filename)
-
-
-
-def save_mask_weights_finetuned(state, folder, is_best, target_density):
-    """
-    Save the training model
-    """
-    if len(folder) == 0:
-        print('Did not save model since no save directory specified in args!')
-        return
-        
-    if not os.path.exists(folder):
-        os.makedirs(folder)
-
-    # filename = os.path.join(folder, 'checkpoint-ft.pth')
-    # print(f" => Saving {filename}")
-    # torch.save(state, filename)
-
-    if is_best:
-        filename = os.path.join(folder, 'checkpoint_best-ft-d' + str(target_density).replace('.', '') + '.pth')
-        print(f" => Saving {filename}")
-        torch.save(state, filename)
-
-def freeze_backbone_weights_of_model( model, modelname ):
-
-        # train mask only
-        for param in model.conv1.parameters(): param.requires_grad = False
-        for param in model.bn1.parameters(): param.requires_grad = False
-        
-        # for param in model.layer1.parameters(): param.requires_grad = False
-        # for param in model.layer2.parameters(): param.requires_grad = False
-        # for param in model.layer3.parameters(): param.requires_grad = False
-
-        # in per layer masks
-        if 'single' in modelname:
-
-            for param in model.layer1.parameters(): param.requires_grad = False
-            for param in model.layer2.parameters(): param.requires_grad = False
-            for param in model.layer3.parameters(): param.requires_grad = False
-
-            # for module in model.mask_estimation_network.modules():
-            #     module.track_running_stats = True
-
-            #     # print(module)
-            #     if isinstance(module, nn.BatchNorm2d):
-            #         if hasattr(module, 'weight'):
-            #             module.weight.requires_grad_(True)
-            #         if hasattr(module, 'bias'):
-            #             module.bias.requires_grad_(True)
-            #         module.train()
-
-        else:
-            for name, param in model.layer1.named_parameters():
-                if 'masker' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-            for name, param in model.layer2.named_parameters():
-                if 'masker' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-            for name, param in model.layer3.named_parameters():
-                if 'masker' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False                       
-                    
-        for param in model.fc.parameters(): param.requires_grad = False
-
-
-
-        print("Froze model backbone weights. Grad only for: masker")
-        # for name, param in model.named_parameters():
-        #     if param.requires_grad == True:
-        #         print(name, ": ", param.requires_grad)
-
-
-def freeze_backbone_weights_of_model_imagenet_resnet( model, modelname ):
-
-        # train mask only
-        for param in model.conv1.parameters(): param.requires_grad = False
-        for param in model.bn1.parameters(): param.requires_grad = False
-        
-        # for param in model.layer1.parameters(): param.requires_grad = False
-        # for param in model.layer2.parameters(): param.requires_grad = False
-        # for param in model.layer3.parameters(): param.requires_grad = False
-
-        # in per layer masks
-        if 'single' in modelname:
-
-            for param in model.layer1.parameters(): param.requires_grad = False
-            for param in model.layer2.parameters(): param.requires_grad = False
-            for param in model.layer3.parameters(): param.requires_grad = False
-            for param in model.layer4.parameters(): param.requires_grad = False
-
-            # for module in model.mask_estimation_network.modules():
-            #     module.track_running_stats = True
-
-            #     # print(module)
-            #     if isinstance(module, nn.BatchNorm2d):
-            #         if hasattr(module, 'weight'):
-            #             module.weight.requires_grad_(True)
-            #         if hasattr(module, 'bias'):
-            #             module.bias.requires_grad_(True)
-            #         module.train()
-
-        else:
-            for name, param in model.layer1.named_parameters():
-                if 'masker' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-            for name, param in model.layer2.named_parameters():
-                if 'masker' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-            for name, param in model.layer3.named_parameters():
-                if 'masker' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False                       
-            for name, param in model.layer4.named_parameters():
-                if 'masker' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False         
-                    
-        for param in model.fc.parameters(): param.requires_grad = False
-
-
-
-        print("Froze model backbone weights. Grad only for: masker")
-        # for name, param in model.named_parameters():
-        #     if param.requires_grad == True:
-        #         print(name, ": ", param.requires_grad)
-
-
-def freeze_backbone_weights_of_model_imagenet_resnet_bns( model, modelname ):
-
-        # train mask only
-        for param in model.conv1.parameters(): param.requires_grad = False
-        for param in model.bn1.parameters(): param.requires_grad = False
-        
-        # for param in model.layer1.parameters(): param.requires_grad = False
-        # for param in model.layer2.parameters(): param.requires_grad = False
-        # for param in model.layer3.parameters(): param.requires_grad = False
-
-        # in per layer masks
-        if 'single' in modelname:
-
-            for param in model.layer1.parameters(): param.requires_grad = False
-            for param in model.layer2.parameters(): param.requires_grad = False
-            for param in model.layer3.parameters(): param.requires_grad = False
-            for param in model.layer4.parameters(): param.requires_grad = False
-
-            # for module in model.mask_estimation_network.modules():
-            #     module.track_running_stats = True
-
-            #     # print(module)
-            #     if isinstance(module, nn.BatchNorm2d):
-            #         if hasattr(module, 'weight'):
-            #             module.weight.requires_grad_(True)
-            #         if hasattr(module, 'bias'):
-            #             module.bias.requires_grad_(True)
-            #         module.train()
-
-        else:
-            for name, param in model.layer1.named_parameters():
-                if 'masker' in name or "bn_" in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-            for name, param in model.layer2.named_parameters():
-                if 'masker' in name or "bn_" in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-            for name, param in model.layer3.named_parameters():
-                if 'masker' in name or "bn_" in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False                       
-            for name, param in model.layer4.named_parameters():
-                if 'masker' in name or "bn_" in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False         
-                    
-        for param in model.fc.parameters(): param.requires_grad = False
-
-
-
-        print("Froze model backbone weights. Grad only for: masker and its bns")
-        # for name, param in model.named_parameters():
-        #     if param.requires_grad == True:
-        #         print(name, ": ", param.requires_grad)
-
-
-
-
-            
-def freeze_backbone_weights_of_model_with_calibration( model, modelname ):
-
-        # train mask only
-        for param in model.conv1.parameters(): param.requires_grad = False
-        for param in model.bn1.parameters(): param.requires_grad = False
-
-        # in per layer masks
-        if 'single' in modelname:
-
-            for param in model.layer1.parameters(): param.requires_grad = False
-            for param in model.layer2.parameters(): param.requires_grad = False
-            for param in model.layer3.parameters(): param.requires_grad = False
-
-        else:
-            for name, param in model.layer1.named_parameters():
-                if 'masker' in name or 'calibration_operation' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-            for name, param in model.layer2.named_parameters():
-                if 'masker' in name or 'calibration_operation' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
-            for name, param in model.layer3.named_parameters():
-                if 'masker' in name or 'calibration_operation' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False                       
-                    
-        for param in model.fc.parameters(): param.requires_grad = False
-
-
-
-        print("Froze model backbone weights. Grad only for: masker")
-        # for name, param in model.named_parameters():
-        #     if param.requires_grad == True:
-        #         print(name, ": ", param.requires_grad)
-
-
-
-# def get_density_scheme( density_range_scheme, budget=-1 ):
-
-#     # Define sparsity range scheme
-#     if density_range_scheme == 0:
-#         target_densities = [ budget]
-#     elif density_range_scheme == 1:
-#         # triple mid
-#         target_densities = [0.25, 0.5, 0.75]
-#     elif density_range_scheme == 2:
-#         # triple low
-#         target_densities = [0.15, 0.25, 0.35]
-#     elif density_range_scheme == 3:
-#         # triple hi
-#         target_densities = [0.65, 0.75, 0.85]
-#     elif density_range_scheme == 4:
-#         # triple 
-#         target_densities = [0.15, 0.50, 0.85]
-
-
-#     elif density_range_scheme == 5:
-#         # triple low
-#         target_densities = [0.10, 0.30, 0.50, 0.70, 0.90]
-#     elif density_range_scheme == 6:
-#         # triple hi
-#         target_densities = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
-#     elif density_range_scheme == 7:
-#         # triple 
-#         target_densities = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
-
-#     else:
-#         print("select scheme")
-#         exit()
-
-#     return target_densities
-
-
-def get_density_scheme( density_range_scheme, budget=-1 ):
-
-    # Define sparsity range scheme
-    if density_range_scheme == 0:
-        target_densities = [ budget]
-    elif density_range_scheme == 1:
-        # triple mid
-        target_densities = [0.25, 0.5, 0.75]
-    elif density_range_scheme == 2:
-        # triple low
-        target_densities = [0.15, 0.25, 0.35]
-    elif density_range_scheme == 3:
-        # triple hi
-        target_densities = [0.65, 0.75, 0.85]
-    elif density_range_scheme == 4:
-        # triple 
-        target_densities = [0.15, 0.50, 0.85]
-
-
-    elif density_range_scheme == 5:
-        # triple low
-        target_densities = [0.10, 0.30, 0.50, 0.70, 0.90]
-    elif density_range_scheme == 6:
-        # triple hi
-        target_densities = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
-    elif density_range_scheme == 7:
-        # triple 
-        target_densities = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
-
-    # samples experiments
-    elif density_range_scheme == 12:
-        # triple low
-        target_densities = [0.10, 0.90]
-
-    elif density_range_scheme == 13:
-        # triple low
-        target_densities = [0.10, 0.50, 0.90]
-
-    elif density_range_scheme == 15:
-        # triple low
-        target_densities = [0.10, 0.30, 0.50, 0.70, 0.90]        
-
-    # range experiments
-    elif density_range_scheme == 20:
-        # triple low
-        target_densities = [0.40, 0.50, 0.60]
-
-    elif density_range_scheme == 40:
-        # triple low
-        target_densities = [0.30, 0.50, 0.70]
-
-    elif density_range_scheme == 60:
-        # triple low
-        target_densities = [0.20, 0.50, 0.80]
-
-    elif density_range_scheme == 80:
-        # triple low
-        target_densities = [0.10, 0.50, 0.90]
-
-    elif density_range_scheme == 222:
-        # triple low
-        target_densities = [0.45, 0.55]        
-
-    elif density_range_scheme == 203040506070:
-        # triple low
-        target_densities = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70]    
-
-    elif density_range_scheme == 758085:
-        # DynamicCNN: ctiny
-        target_densities = [0.75, 0.80, 0.85]    
-    elif density_range_scheme == 30507090:
-        # triple low
-        target_densities = [0.30, 0.50, 0.70, 0.90]
-
-
-
-    else:
-        print("select scheme")
-        exit()
-
-    return target_densities
-
-
-def get_training_targets_based_on_density_scheme( density_range_scheme, networkname, budget=-1 ):
-
-    # # Define sparsity range scheme
-    if density_range_scheme == 0:
-        training_targets = [ budget]
-    # elif density_range_scheme == 1:
-    #     # triple mid
-    #     training_targets = [0.25, 0.5, 0.75]
-    # elif density_range_scheme == 2:
-    #     # triple low
-    #     training_targets = [0.15, 0.25, 0.35]
-    # elif density_range_scheme == 3:
-    #     # triple hi
-    #     training_targets = [0.65, 0.75, 0.85]
-    # elif density_range_scheme == 4:
-    #     # triple 
-    #     training_targets = [0.15, 0.50, 0.85]
-
-
-    # elif density_range_scheme == 5:
-    #     # triple low
-    #     training_targets = [0.10, 0.30, 0.50, 0.70, 0.90]
-    # elif density_range_scheme == 6:
-    #     # triple hi
-    #     training_targets = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
-    # elif density_range_scheme == 7:
-    #     # triple 
-    #     training_targets = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
-
-    # # samples experiments
-    # elif density_range_scheme == 12:
-    #     # triple low
-    #     training_targets = [0.10, 0.90]
-
-    # elif density_range_scheme == 13:
-    #     # triple low
-    #     training_targets = [0.10, 0.50, 0.90]
-
-    # elif density_range_scheme == 15:
-    #     # triple low
-    #     training_targets = [0.10, 0.30, 0.50, 0.70, 0.90]        
-
-
-
-    # range experiments
-    elif density_range_scheme == 20:
-        # triple low
-        # training_targets = [0.40, 0.50, 0.60]
-        # training_targets = [0.40, 0.50, 0.60]
-        if 'resnet20' in networkname:
-            training_targets = [91.66, 92.0, 92.57]
-        elif 'resnet32' in networkname:
-            training_targets = [93.17, 93.32, 93.54]
-        else:
-            training_targets = [100.0,100.0,100.0]
-
-    elif density_range_scheme == 40:
-        # triple low
-        # training_targets = [0.30, 0.50, 0.70]
-        if 'resnet20' in networkname:
-            training_targets = [91.22, 92.0, 92.91]
-        elif 'resnet32' in networkname:
-            training_targets = [92.83, 93.32, 93.81]
-        else:
-            training_targets = [100.0,100.0,100.0]
-
-    elif density_range_scheme == 60:
-        # triple low
-        # training_targets = [0.20, 0.50, 0.80]
-        if 'resnet20' in networkname:
-            training_targets = [90.87, 92.0, 92.74]
-        elif 'resnet32' in networkname:
-            training_targets = [91.95, 93.32, 93.88]
-        else:
-            training_targets = [100.0,100.0,100.0]
-
-    elif density_range_scheme == 80:
-        # triple low
-        # training_targets = [0.10, 0.50, 0.90]
-        if 'resnet20' in networkname:
-            training_targets = [89.83, 92.0, 93.24]
-        elif 'resnet32' in networkname:
-            training_targets = [91.13, 93.32, 94.08]
-        else:
-            training_targets = [100.0,100.0,100.0]
-
-
-    elif density_range_scheme == 203040506070:
-        # triple low
-        # training_targets = [0.10, 0.50, 0.90]
-        if 'resnet20' in networkname:
-            training_targets = [89.83, 92.0, 93.24]
-        elif 'resnet32' in networkname:
-            training_targets = [91.13, 93.32, 94.08]
-        else:
-            training_targets = [100.0,100.0,100.0]
-
-    else:
-        print("select targets")
-        exit()
-
-
-
-    return training_targets
-
-
-
 def get_training_performance_targets( budget_targets, model_name, performance_targets_csv):
 
     budget_targets_to_str = [str(training_target) for training_target in budget_targets]
@@ -669,47 +194,6 @@ def get_training_performance_targets( budget_targets, model_name, performance_ta
     return performance_targets
 
 
-def setlossweights( losswscheme):
-    if losswscheme == '100':
-        result = [1,0,0] 
-    elif losswscheme == '010':
-        result = [0,1,0] 
-    elif losswscheme == '001':
-        result = [0,0,1] 
-    elif losswscheme == '101':
-        result = [1,0,1] 
-    elif losswscheme == '110':
-        result = [1,1,0] 
-    elif losswscheme == '011':
-        result = [0,1,1] 
-    elif losswscheme == '111':
-        result = [1,1,1]         
-    # elif losswscheme == 100:
-    #     result = [1,0,0] 
-    # elif losswscheme == 100:
-    #     result = [1,0,0] 
-    else:
-        print (" DEFAULT SCHEME 111")
-        result = [1,1,1]
-
-    return result
-
-import csv
-def write_csv_for_multiple_sparsities(csv_filename, headers, data):
-
-    # Open the CSV file in write mode and specify the newline parameter to avoid extra empty lines
-    with open(csv_filename, mode='w', newline='') as file:
-        # Create a CSV writer object
-        csv_writer = csv.writer(file)
-
-        # Write the headers to the CSV file
-        csv_writer.writerow(headers)
-
-        # Write the data (list of tuples) to the CSV file
-        csv_writer.writerows(data)
-
-    print(f'CSV file "{csv_filename}" has been created with headers and data.')
-    
 def set_bn_eval_mode(module):
     """
     Recursively sets all BatchNorm layers to evaluation mode.
@@ -719,129 +203,14 @@ def set_bn_eval_mode(module):
     for child_module in module.children():
         set_bn_eval_mode(child_module)
 
-def set_bn_layers_to_eval( model ):
-
-
-    for name, layer in model.named_children():
-        if isinstance(layer, torch.nn.BatchNorm2d):
-            print ( name)
-            layer.eval()  # Set to evaluation mode
-
-    set_bn_eval_mode(model.layer1)
-    set_bn_eval_mode(model.layer2)
-    set_bn_eval_mode(model.layer3)
-
-    # for name, layer in model.layer1.named_children():
-    #     if isinstance(layer, torch.nn.BatchNorm2d):
-    #         print ( name)
-    #         layer.eval()  # Set to evaluation mode
-
-
-    # for name, layer in model.layer1.named_children():
-    #     if isinstance(layer, torch.nn.BatchNorm2d):
-    #         print ( name)
-    #         layer.eval()  # Set to evaluation mode
-
-
-    # for name, layer in model.layer1.named_children():
-    #     if isinstance(layer, torch.nn.BatchNorm2d):
-    #         print ( name)
-    #         layer.eval()  # Set to evaluation mode                                
-            
-    print("Bn layers to eval mode")
-
-            
-# def ssim_loss(img1, img2, window_size=11, window_sigma=1.5, data_range=255, K1=0.01, K2=0.03):
-# def ssim_loss(img1, img2, window_size=11, window_sigma=1.5, data_range=255, K1=0.01, K2=0.03):
-def ssim_loss(img1, img2, window_size=3, window_sigma=0.5, data_range=1.0, K1=0.01, K2=0.03):
-    """
-    Compute the Structural Similarity Index (SSIM) loss between two images.
-
-    Args:
-        img1 (torch.Tensor): Input image 1 (batch of images).
-        img2 (torch.Tensor): Input image 2 (batch of images).
-        window_size (int): Size of the SSIM computation window (default: 11).
-        window_sigma (float): Standard deviation of the SSIM computation window (default: 1.5).
-        data_range (float): Range of the input data (e.g., 255 for 8-bit images, 1 for normalized images) (default: 255).
-        K1 (float): SSIM constant K1 (default: 0.01).
-        K2 (float): SSIM constant K2 (default: 0.03).
-
-    Returns:
-        torch.Tensor: SSIM loss (1 - SSIM) for each image in the batch.
-    """
-    # Ensure that the inputs are in the range [0, 1]
-    if img1.max() > 1.0:
-        img1 = img1 / data_range
-    if img2.max() > 1.0:
-        img2 = img2 / data_range
-
-    # # Compute the SSIM components
-    # mu1 = torch.nn.functional.conv2d(img1, torch.ones(1, 1, window_size, window_size).to(img1.device), padding=window_size // 2)
-    # mu2 = torch.nn.functional.conv2d(img2, torch.ones(1, 1, window_size, window_size).to(img2.device), padding=window_size // 2)
-    # sigma1_sq = torch.nn.functional.conv2d(img1 * img1, torch.ones(1, 1, window_size, window_size).to(img1.device), padding=window_size // 2) - mu1 * mu1
-    # sigma2_sq = torch.nn.functional.conv2d(img2 * img2, torch.ones(1, 1, window_size, window_size).to(img2.device), padding=window_size // 2) - mu2 * mu2
-    # sigma12 = torch.nn.functional.conv2d(img1 * img2, torch.ones(1, 1, window_size, window_size).to(img1.device), padding=window_size // 2) - mu1 * mu2
-
-    # C1 = (K1 * data_range) ** 2
-    # C2 = (K2 * data_range) ** 2
-
-    # ssim_map = ((2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)) / ((mu1 ** 2 + mu2 ** 2 + C1) * (sigma1_sq + sigma2_sq + C2))
-
-    # # Compute the mean SSIM over the window
-    # ssim_per_channel = torch.mean(ssim_map, dim=(1, 2, 3))
-
-    # # Return the mean SSIM loss (1 - SSIM)
-    # return 1 - ssim_per_channel.mean()
-
-
-    # Compute the SSIM components
-    ssim_per_channel = []
-    for channel in range(img1.shape[1]):
-        mu1 = torch.nn.functional.conv2d(img1[:, channel:channel+1, :, :], torch.ones(1, 1, window_size, window_size).to(img1.device), padding=window_size // 2)
-        mu2 = torch.nn.functional.conv2d(img2[:, channel:channel+1, :, :], torch.ones(1, 1, window_size, window_size).to(img2.device), padding=window_size // 2)
-        sigma1_sq = torch.nn.functional.conv2d(img1[:, channel:channel+1, :, :] * img1[:, channel:channel+1, :, :], torch.ones(1, 1, window_size, window_size).to(img1.device), padding=window_size // 2) - mu1 * mu1
-        sigma2_sq = torch.nn.functional.conv2d(img2[:, channel:channel+1, :, :] * img2[:, channel:channel+1, :, :], torch.ones(1, 1, window_size, window_size).to(img2.device), padding=window_size // 2) - mu2 * mu2
-        sigma12 = torch.nn.functional.conv2d(img1[:, channel:channel+1, :, :] * img2[:, channel:channel+1, :, :], torch.ones(1, 1, window_size, window_size).to(img1.device), padding=window_size // 2) - mu1 * mu2
-
-        C1 = (K1 * data_range) ** 2
-        C2 = (K2 * data_range) ** 2
-
-        ssim_map = ((2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)) / ((mu1 ** 2 + mu2 ** 2 + C1) * (sigma1_sq + sigma2_sq + C2))
-
-        # Compute the mean SSIM over the window for this channel
-        ssim_per_channel.append(torch.mean(ssim_map, dim=(1, 2, 3)))
-
-    # Calculate the mean SSIM loss across channels
-    ssim_per_channel = torch.stack(ssim_per_channel, dim=1)
-    mean_ssim_loss = 1 - ssim_per_channel.mean(dim=1)
-
-    # print( img1.shape)
-    # print (mean_ssim_loss.shape)
-    return mean_ssim_loss
-
-
-# Example usage:
-# img1 = torch.randn(1, 3, 256, 256)  # Replace with your own image tensors
-# img2 = torch.randn(1, 3, 256, 256)
-# loss = ssim_loss(img1, img2)
-# print("SSIM Loss:", loss.item())
-
-import matplotlib.pyplot as plt
-import numpy as np
 
 def save_accuracy_while_training(monitorfilename):
 
-    # Initialize empty lists to store X and Y values
     x_values = []
     y_values = []
 
-    # filename = "/home/gzampokas/phd/code/dynamicdynamic/controllable-dynconv/classification/exp/cifar100/resnet20/base/data_2023-09-22_14-51-37.txt"
-    # filename ="/home/gzampokas/phd/code/dynamicdynamic/controllable-dynconv/classification/exp/cifar/resnet20/baseline/sparse05/data_2023-09-11_20-48-48.txt"
-
     filename = monitorfilename
 
-
-    # Read the data file line by line
     with open(filename, 'r') as file:
         lines = file.readlines()
         for line_number, line in enumerate(lines):
@@ -854,12 +223,9 @@ def save_accuracy_while_training(monitorfilename):
     if len(x_values) == 0 or len(y_values) ==0:
         return
 
-    # Find the index of the maximum value in y_values
     max_index = np.argmax(y_values)
     max_x = x_values[max_index]
     max_y = y_values[max_index]
-
-
 
     plt.figure(figsize=(12, 6))
     # Create a plot
@@ -869,7 +235,6 @@ def save_accuracy_while_training(monitorfilename):
     plt.title('Accuracy evolution over training epochs')
 
 
-
     # Annotate the maximum value with a red arrow
     plt.annotate(f'Max: {max_y} [ep:{max_index}]', xy=(max_x, max_y), xytext=(max_x, max_y + 5),
                  arrowprops=dict(arrowstyle='->', color='red'), color='red')
@@ -877,16 +242,10 @@ def save_accuracy_while_training(monitorfilename):
     # plt.legend()
     plt.savefig( filename[:-4] + ".png", dpi=400) #, transparent=True)
     plt.close('all')
-    # Display the plot
     # plt.show()
 
 
-
-
-
-
 def save_best_accuracy_paretto_while_training(monitorfilename, x_labels, y1_data, y2_data):
-# def save_best_accuracy_paretto_while_training(monitorfilename, target_densities, bestprec1s, training_targets):
 
     y1_data = list(y1_data.values())
 
@@ -907,23 +266,6 @@ def save_best_accuracy_paretto_while_training(monitorfilename, x_labels, y1_data
     plt.close()        
     plt.clf()
 
-import models
-def get_pretrained_models( modelname, target_densities ):
-    pt_model_list = {}
-    net_module = models.__dict__[modelname]
-
-    for target_density in target_densities:
-        print ( target_density)
-        pretrained_ckpt = "exp/cifar/" + modelname +"/baseline3x/sparse" + str(target_density).replace(".", "") + "/checkpoint_best.pth"
-        print ( pretrained_ckpt)
-
-        ptmodel = net_module(sparse=target_density, pretrained=pretrained_ckpt).cuda()
-        ptmodel.eval()
-        pt_model_list[target_density] = ptmodel
-    
-    return pt_model_list
-
-
 
 def convert_best_ckpts_to_one(folder, target_densities):
     
@@ -936,103 +278,6 @@ def convert_best_ckpts_to_one(folder, target_densities):
 
     return
 
-
-
-# def loadteachers( models, teacher_model_name, teacher_checkpoint_file, device='cuda'):
-
-#     print("Loading Teacher model(s)")
-    
-#     teacher_models = []
-
-#     if teacher_checkpoint_file:
-
-#         if teacher_checkpoint_file.endswith(".pth"):
-#             print ("Loading single teacher")
-
-#             teacher_net_module = models.__dict__[teacher_model_name]
-#             if "sparse" in teacher_checkpoint_file:
-#                 teacher_model = teacher_net_module(sparse=True, pretrained=False).to(device=device)
-#             else:
-#                 teacher_model = teacher_net_module(sparse=False, pretrained=False).to(device=device)
-
-#             # print ( teacher_model)
-
-#             teacher_resume_path = teacher_checkpoint_file
-#             if os.path.isfile(teacher_resume_path):            
-#                 teacher_checkpoint = torch.load(teacher_resume_path)
-#                 teacher_model.load_state_dict(teacher_checkpoint['state_dict'])
-#                 teacher_model.eval()
-#                 teacher_models.append(teacher_model)
-#                 print ( "[\u2713] Succesfully Loaded teacher checkpoint from ", teacher_resume_path)
-#             else:
-#                 print("Wrong teacher ckpt")
-            
-       
-#         elif teacher_checkpoint_file.endswith(".txt"):
-#             print ("Loading multiple teachers")
-
-#             teacher_checkpoint_file = open(teacher_checkpoint_file, 'r')
-#             lines = teacher_checkpoint_file.readlines()
-#             print ( lines)
-#             for line in lines:
-#                 print (line)
-#                 teacher_net_module = models.__dict__[teacher_model_name]
-
-#                 if "sparse" in line:
-#                     teacher_model = teacher_net_module(sparse=True, pretrained=False).to(device=device)
-#                 else:
-#                     teacher_model = teacher_net_module(sparse=False, pretrained=False).to(device=device)
-
-#                 # print ( teacher_model)
-#                 teacher_resume_path = line
-#                 if not os.path.isfile(teacher_resume_path):
-#                     if os.path.isfile(line[:-1]):
-#                         teacher_resume_path = line[:-1] # random character at the end
-
-#                 # teacher_resume_path = line[:-1] # random character at the end
-#                 if os.path.isfile(teacher_resume_path):   
-
-#                     if '.cache' in teacher_resume_path:
-#                         state_dict = load_state_dict_from_url(teacher_resume_path)
-#                         teacher_model.load_state_dict(state_dict, strict=False)
-#                     else:
-#                         teacher_checkpoint = torch.load(teacher_resume_path)
-#                         teacher_model.load_state_dict(teacher_checkpoint['state_dict'])
-                    
-#                     teacher_model.eval()
-#                     teacher_models.append(teacher_model)
-#                     print ( "[\u2713] Succesfully Loaded teacher checkpoint from ", teacher_resume_path)
-#                 else:
-#                     print("Wrong teacher ckpt")
-
-#         else:
-#             print ("Specify correct teacher_checkpoint file")
-
-#     # print("LEN OF Teachers ", len(teacher_models))
-#     # exit()
-#     return teacher_models
-
-model_urls = {
-    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
-    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
-    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
-    'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
-    'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
-    'resnext50_32x4d': 'https://download.pytorch.org/models/resnext50_32x4d-7cdf4587.pth',
-    'resnext101_32x8d': 'https://download.pytorch.org/models/resnext101_32x8d-8ba56ff5.pth',
-    'wide_resnet50_2': 'https://download.pytorch.org/models/wide_resnet50_2-95faca4d.pth',
-    'wide_resnet101_2': 'https://download.pytorch.org/models/wide_resnet101_2-32ee1156.pth',
-
-    "convnext_tiny": "https://dl.fbaipublicfiles.com/convnext/convnext_tiny_1k_224_ema.pth",
-    "convnext_small": "https://dl.fbaipublicfiles.com/convnext/convnext_small_1k_224_ema.pth",
-    "convnext_base": "https://dl.fbaipublicfiles.com/convnext/convnext_base_1k_224_ema.pth",
-    "convnext_large": "https://dl.fbaipublicfiles.com/convnext/convnext_large_1k_224_ema.pth",
-    # "convnext_tiny_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_tiny_22k_224.pth",
-    # "convnext_small_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_small_22k_224.pth",
-    # "convnext_base_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_base_22k_224.pth",
-    # "convnext_large_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_large_22k_224.pth",
-    # "convnext_xlarge_22k": "https://dl.fbaipublicfiles.com/convnext/convnext_xlarge_22k_224.pth",
-}
 
 def loadteachers( models, teacher_model_name, device='cuda'):
 
@@ -1076,24 +321,6 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
-import json
-
-import torch
-from torch import optim as optim
-
-from timm.optim.adafactor import Adafactor
-from timm.optim.adahessian import Adahessian
-from timm.optim.adamp import AdamP
-from timm.optim.lookahead import Lookahead
-from timm.optim.nadam import Nadam
-# from timm.optim.novograd import NovoGrad
-# from timm.optim.nvnovograd import NvNovoGrad
-from timm.optim.radam import RAdam
-from timm.optim.rmsprop_tf import RMSpropTF
-from timm.optim.sgdp import SGDP
-
-import math 
-from torch._six import inf
 
 def get_parameter_groups(model, weight_decay=1e-5, skip_list=(), get_num_layer=None, get_layer_scale=None, bone_lr_scale=0.01):
     parameter_group_names = {}
@@ -1241,7 +468,6 @@ def create_optimizer(args, model, get_num_layer=None, get_layer_scale=None, filt
             optimizer = Lookahead(optimizer)
 
     return optimizer
-
 
 
 class NativeScalerWithGradNormCount:

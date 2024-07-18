@@ -9,7 +9,8 @@ Given a base model, we propose a spatially adaptive optimization framework, whic
 > BMVC 2024  
 
 Our work equips spatially adaptive models with the ability to perform inference at multiple target budgets by providing the target budget as input. 
-<img width="80%" src="multi-target-blocks.png"><br>
+
+<img width="50%" src="multi-target-blocks.png"><br>
 
 ## How It's Made:
 

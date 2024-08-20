@@ -305,9 +305,6 @@ def main():
 
         val_criterions[str(target_density)] = Loss(target_density, task_criterion)
 
-
-    print(args.model)
-
     model_ema = None
     if args.model_ema:
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before SyncBN and DDP wrapper
@@ -321,14 +318,14 @@ def main():
     model_without_ddp = model
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    print("Model = %s" % str(model_without_ddp))
-    print('number of params:', n_parameters)
+    # print("Model = %s" % str(model_without_ddp))
+    print('Number of params:', n_parameters)
 
     total_batch_size = args.batchsize * args.update_freq *  1 #utils.get_world_size()
     num_training_steps_per_epoch = len(train_dataset) // total_batch_size
     print("LR = %.8f" % args.lr)
     print("Batch size = %d" % total_batch_size)
-    print("Update frequent = %d" % args.update_freq)
+    print("Update frequency = %d" % args.update_freq)
     print("Number of training examples = %d" % len(train_dataset))
     print("Number of training training per epoch = %d" % num_training_steps_per_epoch)
 

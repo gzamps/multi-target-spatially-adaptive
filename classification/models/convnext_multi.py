@@ -120,14 +120,14 @@ def initialize_norm_weights_for_multiple_densities( model ):
     print( "Pass BN weigths also")
     for stage in model.stages:
         for bl in stage:
-            print (bl)
+            # print (bl)
             for target_density in model.target_densities:
                 norm_module_name = "norm_"+str(target_density).replace('.', '')
 
                 getattr(bl, norm_module_name).weight = bl.norm.weight
                 getattr(bl, norm_module_name).bias = bl.norm.bias
 
-                print("passing weight for ", norm_module_name)
+                # print("passing weight for ", norm_module_name)
 
     return model
 

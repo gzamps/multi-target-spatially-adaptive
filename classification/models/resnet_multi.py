@@ -123,7 +123,7 @@ def _resnet_multi(arch, block, layers, pretrained, progress, target_densities = 
     model = ResNet_multi(block, layers, target_densities=target_densities,  **kwargs)
     if pretrained:
         print( "Loading pretrained ", arch)
-        print ("Before loading bns: ", model.layer1[0].bn1.weight)
+        # print ("Before loading bns: ", model.layer1[0].bn1.weight)
         state_dict = load_state_dict_from_url(model_urls[arch],
                                               progress=progress)
         model.load_state_dict(state_dict, strict=False)
@@ -195,7 +195,7 @@ def _resnet_multi(arch, block, layers, pretrained, progress, target_densities = 
                     getattr(bl, module_name3).bias = bl.bn3.bias    
 
 
-        print ("After loading bns: ", model.layer1[0].bn1.weight)                                 
+        # print ("After loading bns: ", model.layer1[0].bn1.weight)                                 
     
     return model
 
